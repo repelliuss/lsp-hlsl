@@ -1,0 +1,19 @@
+* lsp-hlsl
+
+This LSP client integrates [[https://github.com/KStocky/HLSL-LSP][HLSL-LSP]]. While HLSL-LSP is not
+stable or mature enough in my experience, it really is an
+improvement. Please report any issues you find to upstream repo or
+even contribute to it for better shader development experience.
+
+I'll create a PR to lsp-mode once I believe the experience is good
+enough. Let me know issues you have found.
+
+** AI Usage
+
+This repository contains Anthropic Claude Sonnet 5, Opus 4.6/5 AI generated code.
+
+** License
+
+Copyright (C) 2026 Sami Batuhan BASMAZ ÖLMEZ.
+
+This project is licensed under the GNU General Public License v3.0 - see the [[LICENSE][LICENSE]] file for details.
