@@ -24,10 +24,13 @@
 ;; Activate via `lsp-hlsl-setup' or the minor mode `lsp-hlsl-mode'.
 ;; Project-specific configuration (include paths, defines, etc.) is best
 ;; handled via `.dir-locals.el'.
+;;
+;; If `hlsl-lsp' is not already on `exec-path', run
+;; `M-x lsp-install-server RET hlsl-lsp RET' to download the latest
+;; release for your platform (Linux and Windows x64 only; other
+;; platforms must build and set `lsp-hlsl-executable' manually).
 
 ;;; Code:
-
-;; TODO: install script
 
 (require 'lsp-mode)
 
@@ -39,18 +42,101 @@
 
 ;;; Connection
 
-(defcustom lsp-hlsl-executable
-  (or (executable-find "hlsl-lsp")
-      (executable-find "hlsl-lsp.exe")
-      "hlsl-lsp")
-  "Path to the `hlsl-lsp' executable."
-  :type 'string
+(defcustom lsp-hlsl-executable nil
+  "Path to the `hlsl-lsp' executable.
+When nil, the bare executable name is resolved from `exec-path' (via
+`executable-find', which also tries `.exe' on Windows), falling back
+to a copy previously downloaded with `lsp-install-server'."
+  :type '(choice (const :tag "Auto-detect" nil) file)
   :group 'lsp-hlsl)
+
+(defun lsp-hlsl--find-executable ()
+  "Return `lsp-hlsl-executable', or the default executable name.
+Used as the `:system' `lsp-dependency' provider and as the ultimate
+`:new-connection' fallback.  Always returns a non-nil name so
+`lsp--system-path' can search `exec-path' itself instead of being
+handed nil, which it does not guard against."
+  (or lsp-hlsl-executable "hlsl-lsp"))
 
 (defcustom lsp-hlsl-args nil
   "Arguments passed to `lsp-hlsl-executable'."
   :type '(repeat string)
   :group 'lsp-hlsl)
+
+;;; Installation
+
+(defcustom lsp-hlsl-version "latest"
+  "Version of HLSL-LSP to install via `lsp-install-server'.
+Either \"latest\" to always fetch the newest GitHub release, or an
+explicit release tag such as \"v0.14.1\"; see
+https://github.com/KStocky/HLSL-LSP/releases for available tags."
+  :type '(choice (const :tag "Latest" "latest")
+                 string)
+  :group 'lsp-hlsl)
+
+(defvar lsp-hlsl--download-url-cache nil
+  "Cached download URL for the HLSL-LSP vscode extension archive.")
+
+(defconst lsp-hlsl--vsix-asset-name "hlsl-lsp-vscode.vsix"
+  "Release asset bundling prebuilt HLSL-LSP binaries for all platforms.
+HLSL-LSP does not publish a standalone Windows binary archive; the
+VS Code extension `.vsix' is itself a zip archive containing the
+Linux and Windows server binaries side by side, so it is used as the
+download source for both.")
+
+(defun lsp-hlsl--download-url ()
+  "Return the download URL of the HLSL-LSP vscode extension to install.
+When `lsp-hlsl-version' is \"latest\", queries the GitHub releases API
+for the newest release; otherwise builds the URL for that release tag
+directly, without any network request."
+  (setq lsp-hlsl--download-url-cache
+        (if (equal lsp-hlsl-version "latest")
+            (lsp--find-latest-gh-release-url
+             "https://api.github.com/repos/KStocky/HLSL-LSP/releases/latest"
+             (concat (regexp-quote lsp-hlsl--vsix-asset-name) "\\'"))
+          (format "https://github.com/KStocky/HLSL-LSP/releases/download/%s/%s"
+                  lsp-hlsl-version
+                  lsp-hlsl--vsix-asset-name))))
+
+(defun lsp-hlsl--server-dir ()
+  "Directory the extracted HLSL-LSP vscode extension lives in."
+  (f-join lsp-server-install-dir "hlsl-lsp"))
+
+(defun lsp-hlsl--store-path ()
+  "Path the downloaded vsix archive is decompressed from.
+`lsp-download-install' decompresses a `:zip' archive into the parent
+of this path, i.e. `lsp-hlsl--server-dir'; this path itself is only
+used to derive the `.zip' download location."
+  (f-join (lsp-hlsl--server-dir) "hlsl-lsp-vscode-archive"))
+
+(defun lsp-hlsl--platform-dir ()
+  "Return the vsix server subdirectory name for the current platform."
+  (pcase (list system-type (lsp-resolve-value lsp--system-arch))
+    (`(gnu/linux  x64) "linux-x64")
+    (`(windows-nt x64) "win32-x64")
+    (_ (user-error
+        "HLSL-LSP does not publish a prebuilt %s/%s server; install `hlsl-lsp' manually and set `lsp-hlsl-executable'"
+        system-type (lsp-resolve-value lsp--system-arch)))))
+
+(defun lsp-hlsl--binary-path ()
+  "Path to the `hlsl-lsp' executable once downloaded.
+The vsix also bundles a sidecar `hlsl-analysis-worker' process and DXC
+shared libraries that the server loads at runtime, so the whole
+platform directory is extracted alongside the executable rather than
+extracting it alone."
+  (f-join (lsp-hlsl--server-dir) "extension" "server" (lsp-hlsl--platform-dir)
+          (if (eq system-type 'windows-nt)
+              "hlsl-lsp.exe"
+            "hlsl-lsp")))
+
+(lsp-dependency
+ 'hlsl-lsp
+ '(:system lsp-hlsl--find-executable)
+ '(:download :url lsp-hlsl--download-url
+             :store-path lsp-hlsl--store-path
+             :decompress :zip
+             :binary-path lsp-hlsl--binary-path
+             :set-executable? t))
 
 ;;; Major-mode activation
 
@@ -184,11 +270,14 @@ workspace buffer so buffer-local values, for example ones from
    (make-lsp-client
     :new-connection (lsp-stdio-connection
                      (lambda ()
-                       (cons lsp-hlsl-executable
+                       (cons (or (lsp-package-path 'hlsl-lsp)
+                                 (lsp-hlsl--find-executable))
                              lsp-hlsl-args)))
     :activation-fn (lsp-activate-on lsp-hlsl-language-id)
     :synchronize-sections (list lsp-hlsl--section)
     :initialized-fn #'lsp-hlsl--push-configuration
+    :download-server-fn (lambda (_client callback error-callback _update?)
+                           (lsp-package-ensure 'hlsl-lsp callback error-callback))
     :server-id lsp-hlsl--server-id)))
 
 (defun lsp-hlsl--unregister ()
